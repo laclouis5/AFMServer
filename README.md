@@ -13,7 +13,7 @@ swift run
 Then, make a request using the OpenAI API:
 
 ```bash
- curl http://localhost:8080/v1/responses \
+curl http://localhost:8080/v1/responses \
   -H "Content-Type: application/json" \
   -d "{
     \"model\": \"apple-fm-default\",
