@@ -1,0 +1,22 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:AFMServer}",
+            "name": "Debug AFMServer",
+            "program": "${workspaceFolder:AFMServer}/.build/debug/AFMServer",
+            "preLaunchTask": "swift: Build Debug AFMServer"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:AFMServer}",
+            "name": "Release AFMServer",
+            "program": "${workspaceFolder:AFMServer}/.build/release/AFMServer",
+            "preLaunchTask": "swift: Build Release AFMServer"
+        }
+    ]
+}
