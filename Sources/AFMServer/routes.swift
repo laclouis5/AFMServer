@@ -1,9 +1,81 @@
 import Vapor
 import FoundationModels
 
+struct AFMInputMessage: Content {
+    let role: String
+    let content: String
+}
+
+enum AFMInput: Content {
+    case string(String)
+    case list([AFMInputMessage])
+    
+    init(from decoder: any Decoder) throws {
+            let container = try decoder.singleValueContainer()
+
+            if let text = try? container.decode(String.self) {
+                self = .string(text)
+                return
+            }
+
+            if let messages = try? container.decode([AFMInputMessage].self) {
+                self = .list(messages)
+                return
+            }
+
+            throw DecodingError.typeMismatch(
+                AFMInput.self,
+                .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: #"Expected a String or an array of {"role": ..., "content": ...} for `input`"#,
+                )
+            )
+        }
+}
+
+extension Optional where Wrapped == AFMInput {
+    func transcript(instructions: String?) throws -> (Transcript, Prompt) {
+        var entries = [Transcript.Entry]()
+        let prompt: Prompt
+        
+        if let instructions {
+            entries.append(.instructions(.init(segments: [.text(.init(content: instructions))], toolDefinitions: [])))
+        }
+        
+        switch self {
+        case let .string(input):
+            prompt = Prompt(input)
+        case let .list(inputs):
+            guard let lastItem = inputs.last, lastItem.role == "user" else {
+                throw Abort(.badRequest, reason: "Malformed input")
+            }
+            
+            prompt = Prompt(lastItem.content)
+            let items = inputs[..<(inputs.endIndex - 1)]
+            
+            for item in items {
+                switch item.role {
+                case "developer":
+                    entries.append(.instructions(.init(segments: [.text(.init(content: item.content))], toolDefinitions: [])))
+                case "user":
+                    entries.append(.prompt(.init(segments: [.text(.init(content: item.content))])))
+                case "assistant":
+                    entries.append(.response(.init(assetIDs: [], segments: [.text(.init(content: item.content))])))
+                default:
+                    throw Abort(.badRequest, reason: "Malformed input")
+                }
+            }
+        case .none:
+            prompt = Prompt("")
+        }
+        
+        return (Transcript(entries: entries), prompt)
+    }
+}
+
 struct AFMCreateResponse: Content {
     let model: String?
-    let input: String?
+    let input: AFMInput?
     let instructions: String?
     let max_output_tokens: Int?
     let stream: Bool?
@@ -60,19 +132,21 @@ func encodeSSE(content: some Content, jsonEncoder: JSONEncoder) throws -> ByteBu
 }
 
 func respond(
-    session: LanguageModelSession,
     response: AFMCreateResponse,
     req: Request
 ) async throws -> Response {
+    let (transcript, prompt) = try response.input.transcript(instructions: response.instructions)
+    let session = LanguageModelSession(model: .default, transcript: transcript)
+
     let modelResponse = try await session.respond(
-        to: response.input ?? "",
+        to: prompt,
         options: GenerationOptions(
             temperature: response.temperature,
             maximumResponseTokens: response.max_output_tokens,
         )
     ).content
     
-    req.logger.info("Model response done")
+    req.logger.info("Model response done: \(session.transcript)")
     
     let content = AFMContent(
         type: "output_text",
@@ -100,7 +174,6 @@ func respond(
 }
 
 func streamRespond(
-    session: LanguageModelSession,
     response: AFMCreateResponse,
     req: Request
 ) async throws -> Response {
@@ -108,8 +181,11 @@ func streamRespond(
     
     let body = Response.Body(asyncStream: { writer in
         do {
+            let (transcript, prompt) = try response.input.transcript(instructions: response.instructions)
+            let session = LanguageModelSession(model: .default, transcript: transcript)
+            
             let responseStream = session.streamResponse(
-                to: response.input ?? "",
+                to: prompt,
                 options: GenerationOptions(
                     temperature: response.temperature,
                     maximumResponseTokens: response.max_output_tokens,
@@ -206,13 +282,11 @@ func routes(_ app: Application) async throws {
                     throw Abort(.badRequest, reason: "Model does not exist")
                 }
                 
-                let session = LanguageModelSession(model: .default, instructions: response.instructions)
-                
                 switch response.stream {
                 case nil, false:
-                    return try await respond(session: session, response: response, req: req)
+                    return try await respond(response: response, req: req)
                 case true:
-                    return try await streamRespond(session: session, response: response, req: req)
+                    return try await streamRespond(response: response, req: req)
                 }
             }
         }
